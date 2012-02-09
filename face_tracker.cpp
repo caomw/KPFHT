@@ -93,10 +93,10 @@ class OpenNIFaceTracking
   typedef typename Cloud::ConstPtr CloudConstPtr;
 
   //typedef KLDAdaptiveParticleFilterOMPTracker<RefPointType, ParticleT> ParticleFilter;
-  //typedef KLDAdaptiveParticleFilterTracker<RefPointType, ParticleT> ParticleFilter;
   //typedef ParticleFilterOMPTracker<RefPointType, ParticleT> ParticleFilter;
+  //typedef typename ParticleFilter::CoherencePtr CoherencePtr;
+
   typedef ParticleFilterTracker<RefPointType, ParticleT> ParticleFilter;
-  typedef typename ParticleFilter::CoherencePtr CoherencePtr;
   typedef typename pcl::search::KdTree<PointType> KdTree;
   typedef typename KdTree::Ptr KdTreePtr;
 
@@ -143,12 +143,8 @@ class OpenNIFaceTracking
       tracker->setDelta (0.99);
       tracker->setEpsilon (0.2);
       ParticleT bin_size;
-      bin_size.x = 0.1;
-      bin_size.y = 0.1;
-      bin_size.z = 0.1;
-      bin_size.roll = 0.1;
-      bin_size.pitch = 0.1;
-      bin_size.yaw = 0.1;
+      bin_size.x = bin_size.y = bin_size.z = 0.1;
+      bin_size.roll = bin_size.pitch = bin_size.yaw = 0.1;
       tracker->setBinSize (bin_size);
       tracker_ = tracker;
     }
@@ -159,11 +155,13 @@ class OpenNIFaceTracking
     tracker_->setInitialNoiseMean (default_initial_mean);
     tracker_->setIterationNum (1);
 
-    tracker_->setUseChangeDetector(false);
-    tracker_->setIntervalOfChangeDetection(1);
+    tracker_->setResolutionOfChangeDetection(0.1);
+    tracker_->setIntervalOfChangeDetection(3);
+    //tracker_->setMinPointsOfChangeDetection(50);
+    tracker_->setUseChangeDetector(true);
     
-    tracker_->setParticleNum (300);
-    tracker_->setResampleLikelihoodThr(0.00);
+    tracker_->setParticleNum (400);
+    tracker_->setResampleLikelihoodThr(0.0001); // ?????
     tracker_->setUseNormal (false); //TODO: toggle normal usage here
 
     // setup coherences
@@ -189,8 +187,8 @@ class OpenNIFaceTracking
 
     //TODO: change search method here
     //boost::shared_ptr<pcl::search::KdTree<RefPointType> > search (new pcl::search::KdTree<RefPointType> (false));
-    //boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (0.01));
-    boost::shared_ptr<pcl::search::OrganizedNeighbor<RefPointType> > search (new pcl::search::OrganizedNeighbor<RefPointType>);
+    boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (0.01));
+    //boost::shared_ptr<pcl::search::OrganizedNeighbor<RefPointType> > search (new pcl::search::OrganizedNeighbor<RefPointType>);
 
     coherence->setSearchMethod (search);
     coherence->setMaximumDistance (0.01);
@@ -232,53 +230,53 @@ class OpenNIFaceTracking
   }
   
   void
-  drawResult (pcl::visualization::PCLVisualizer& viz)
+  drawResult (pcl::visualization::PCLVisualizer &viz)
   {
-    CloudPtr result_cloud (new Cloud ());
-    ParticleXYZRPY result = tracker_->getResult ();
-    Eigen::Affine3f transform = tracker_->toEigenMatrix (result);
+    //CloudPtr result_cloud (new Cloud ());
+    Eigen::Affine3f trans = tracker_->toEigenMatrix ( tracker_->getResult () );
 
     // move a little bit for better visualization
-    transform.translation () += Eigen::Vector3f (0.0, 0.0, -0.005);
+    trans.translation () += Eigen::Vector3f (0.0, 0.0, -0.005);
+    reference_.reset(new Cloud ());
+    pcl::transformPointCloud<PointType> (*(tracker_->getReferenceCloud ()), *reference_, trans);
 
-    pcl::transformPointCloud<RefPointType> (*(tracker_->getReferenceCloud ()), *result_cloud, transform);
-
-    pcl::visualization::PointCloudColorHandlerCustom<PointType> red_color (result_cloud, 255, 0, 0);
-    if (!viz.updatePointCloud (result_cloud, red_color, "resultcloud"))
-      viz.addPointCloud (result_cloud, red_color, "resultcloud");
-
+    pcl::visualization::PointCloudColorHandlerCustom<PointType> red_color (reference_, 255, 0, 0);
+    if (!viz.updatePointCloud (reference_, red_color, "resultcloud"))
+      viz.addPointCloud (reference_, red_color, "resultcloud");
+  }
+  
+  void
+  drawAverageNormal(pcl::visualization::PCLVisualizer &viz)
+  {
     ref_normals_.reset (new pcl::PointCloud<pcl::Normal>);
-    normalEstimation (result_cloud, *ref_normals_);
+    normalEstimation (reference_, *ref_normals_);
 
-    Eigen::Vector4f c;
-    pcl::compute3DCentroid<PointType> (*result_cloud, c);
-    pcl::PointXYZ ctr (c[0], c[1], c[2]);
-    pcl::PointXYZ orig (0, 0, 0);
+    Eigen::Vector4f ctr;
+    pcl::compute3DCentroid<PointType> (*reference_, ctr);
+    pcl::PointXYZ ctrOid (ctr[0], ctr[1], ctr[2]);
+    pcl::PointXYZ avgNrml (0, 0, 0);
 
-    //viz.removeShape("originArrow");
-    //viz.addArrow(orig, ctr, 100, 255, 100, "originArrow");
-
-    pcl::PointXYZ surfaceNormalPoint;
-
-    for (size_t i = 0; i < ref_normals_->points.size (); i++)
+    double size = ref_normals_->points.size ();
+    for (size_t i = 0; i < size; i++)
     {
-      surfaceNormalPoint.x += ref_normals_->points[i].normal_x;
-      surfaceNormalPoint.y += ref_normals_->points[i].normal_y;
-      //surfaceNormalPoint.z += ref_normals_->points[i].normal_z;
+      avgNrml.x += ref_normals_->points[i].normal_x;
+      avgNrml.y += ref_normals_->points[i].normal_y;
+      avgNrml.z += ref_normals_->points[i].normal_z;
     }
+    avgNrml.x /= size; avgNrml.y /= size; avgNrml.z /= size;
 
-    surfaceNormalPoint.x /= ref_normals_->points.size();
-    surfaceNormalPoint.y /= ref_normals_->points.size();
-    surfaceNormalPoint.z = 0.4;
+    //double distToSensor = sqrt( pow(ctrOid.x,2)+pow(ctrOid.y,2)+pow(ctrOid.z,2) );
+    double lengthAvgNrml = sqrt( pow(avgNrml.x-ctrOid.x,2)+pow(avgNrml.y-ctrOid.y,2)+pow(avgNrml.z-ctrOid.z,2) );
+    avgNrml.x /= lengthAvgNrml; avgNrml.y /= lengthAvgNrml; avgNrml.z /= lengthAvgNrml;
 
-    viz.removeShape("normalArrow");
-    viz.addArrow(surfaceNormalPoint, ctr, 100, 255, 100, "normalArrow");
+    viz.removeShape("avgNorm");
+    viz.addArrow(avgNrml, ctrOid, 100, 255, 100, "avgNorm");
   }
   
   void
   drawInfo (pcl::visualization::PCLVisualizer &viz)
   {
-    viz.removeShape ("N");
+    viz.removeShape("N");
     viz.addText ((boost::format ("number of Reference PointClouds: %d") % tracker_->getReferenceCloud ()->points.size ()).str (),
                  10, 15, 15, 1.0, 1.0, 1.0, "N");
 
@@ -334,6 +332,7 @@ class OpenNIFaceTracking
       if (drawParticles (viz))
       {
         drawResult (viz);
+        drawAverageNormal(viz);
         drawInfo (viz);
       }
     }

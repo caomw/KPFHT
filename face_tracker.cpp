@@ -47,6 +47,8 @@
 
 #include <boost/format.hpp>
 
+#include "../../../doc/tutorials/content/sources/template_alignment/template_alignment.cpp"
+
 #define FPS_CALC_BEGIN                          \
     static double duration = 0;                 \
     double start_time = pcl::getTime ();        \
@@ -158,7 +160,7 @@ class OpenNIFaceTracking
     tracker_->setResolutionOfChangeDetection(0.1);
     tracker_->setIntervalOfChangeDetection(3);
     //tracker_->setMinPointsOfChangeDetection(50);
-    tracker_->setUseChangeDetector(true);
+    tracker_->setUseChangeDetector(false);
     
     tracker_->setParticleNum (400);
     tracker_->setResampleLikelihoodThr(0.0001); // ?????
@@ -676,6 +678,30 @@ class OpenNIFaceTracking
     return 1/(pow(10,(7-ndigits)));
   }
 
+  void alignmentSAC(const CloudConstPtr &target_cloud, Cloud &template_cloud)
+  {
+    FeatureCloud targt_frame, templ_cloud;
+    TemplateAlignment template_alignment;
+    TemplateAlignment::Result alignment_result;
+
+    pcl::PointCloud<pcl::PointXYZ> xyz_target, xyz_template;
+    pcl::copyPointCloud(*target_cloud, xyz_target);
+    pcl::copyPointCloud(template_cloud, xyz_template);
+
+    targt_frame.setInputCloud (xyz_target.makeShared());
+    templ_cloud.setInputCloud(xyz_template.makeShared());
+
+    template_alignment.setTargetCloud (targt_frame);
+    //template_align.addTemplateCloud(templ_cloud);
+
+    template_alignment.align(templ_cloud, alignment_result);
+    PCL_INFO ("SAC-IA fitness score: %f\n", alignment_result.fitness_score);
+
+    pcl::transformPointCloud (*templ_cloud.getPointCloud(), xyz_template, alignment_result.final_transformation);
+
+    pcl::copyPointCloud(xyz_template, template_cloud);
+  }
+
   void
   cloud_cb (const CloudConstPtr &cloud)
   {
@@ -724,14 +750,21 @@ class OpenNIFaceTracking
           PCL_ERROR (e.what ());
         }
         PCL_INFO("-->>> Point cloud loaded from file\n");
+
+        // capture one frame from camera for initial alignment
+        alignmentSAC(cloud_pass_downsampled_, *temp_cloud);
       }
 
       // downsample and set cloud
       ref_downsampl_grid_size = estimateGridSize(temp_cloud);
       gridSample (temp_cloud, *reference_cloud, ref_downsampl_grid_size);
+
       setReferenceCloud (reference_cloud);
       reference_.reset (new Cloud(*temp_cloud));
       PCL_INFO("-->>> Target point cloud is set!\n");
+
+      counter_ = 0;
+      return;
     }
 
     if (counter_ > 10) // start tracking
